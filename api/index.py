@@ -52,10 +52,9 @@ def index():
     return jsonify({
         'name':      'Chicago Gun Violence API',
         'endpoints': {
-            '/incidents':      'GET ?date=YYYY-MM-DD&year=YYYY',
-            '/boundaries':     'GET — ward and district GeoJSON',
-            '/victim-search':  'GET ?block=&date=YYYY-MM-DD — DuckDuckGo snippet search',
-            '/health':         'GET — check loaded data',
+            '/incidents':  'GET ?date=YYYY-MM-DD&year=YYYY',
+            '/boundaries': 'GET — ward and district GeoJSON',
+            '/health':     'GET — check loaded data',
         }
     })
 
@@ -135,43 +134,3 @@ def boundaries():
     if not result:
         return jsonify({'error': 'Boundary files not found'}), 404
     return jsonify(result)
-
-
-@app.route('/victim-search')
-def victim_search():
-    block    = request.args.get('block', '').strip()
-    date     = request.args.get('date', '').strip()
-    city     = 'Chicago'
-
-    import urllib.request, urllib.parse, re
-
-    queries = [
-        f'{date} shooting victim {block} {city}',
-        f'{city} shooting {block} {date[:7]}',
-        f'{city} {block} shooting victim',
-    ]
-
-    snippets = []
-    headers  = {'User-Agent': 'Mozilla/5.0'}
-
-    for q in queries:
-        try:
-            url = 'https://html.duckduckgo.com/html/?q=' + urllib.parse.quote(q)
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=6) as resp:
-                html = resp.read().decode('utf-8', errors='ignore')
-            # Pull text from result snippets
-            found = re.findall(r'<a class="result__snippet"[^>]*>(.*?)</a>', html)
-            for f in found[:5]:
-                clean = re.sub(r'<[^>]+>', '', f).strip()
-                if clean and city.lower() in clean.lower():
-                    snippets.append(clean)
-        except Exception as e:
-            print(f'victim-search error: {e}')
-
-    return jsonify({
-        'date':     date,
-        'block':    block,
-        'queries':  queries,
-        'snippets': snippets[:10]
-    })
