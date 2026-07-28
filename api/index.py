@@ -4,13 +4,13 @@ import os
 
 app = Flask(__name__)
 
-# Directory containing the enriched CSV data files
-DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
+BASE     = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE, 'data')
 
-# Load all CSVs at startup
-DATA = {}
 FILES = {
-    '2024': ['chicago_shootings_enriched_2024.csv'],
+    '2024': [
+        'chicago_shootings_enriched_2024.csv',
+    ],
     '2025': [
         'chicago_shootings_enriched_2025_part1.csv',
         'chicago_shootings_enriched_2025_part2.csv',
@@ -24,61 +24,92 @@ FILES = {
     ],
 }
 
-for year, files in FILES.items():
+# Load and cache all CSVs at cold start
+DATA = {}
+for year, filenames in FILES.items():
     dfs = []
-    for f in files:
-        path = os.path.join(DATA_DIR, f)
+    for fname in filenames:
+        path = os.path.join(DATA_DIR, fname)
         if os.path.exists(path):
-            dfs.append(pd.read_csv(path))
+            dfs.append(pd.read_csv(path, dtype=str))
+        else:
+            print(f'WARNING: {path} not found')
     if dfs:
-        DATA[year] = pd.concat(dfs, ignore_index=True)
+        df = pd.concat(dfs, ignore_index=True)
+        # Normalize date to YYYY-MM-DD for reliable matching
+        df['date_only'] = pd.to_datetime(
+            df['date'], errors='coerce'
+        ).dt.strftime('%Y-%m-%d')
+        DATA[year] = df
+        print(f'Loaded {year}: {len(df)} rows')
 
-@app.route('/incidents')
-def incidents():
-    date = request.args.get('date')   # YYYY-MM-DD
-    year = request.args.get('year')   # 2024/2025/2026
 
-    if not date or not year:
-        return jsonify({'error': 'date and year required'}), 400
-
-    if year not in DATA:
-        return jsonify({'error': f'No data for year {year}'}), 404
-
-    df = DATA[year]
-
-    # Normalize date column — handle both date-only and datetime formats
-    df['date_only'] = pd.to_datetime(
-        df['date'], errors='coerce'
-    ).dt.strftime('%Y-%m-%d')
-
-    matches = df[df['date_only'] == date]
-
-    if matches.empty:
-        return jsonify({
-            'date': date,
-            'count': 0,
-            'incidents': [],
-            'message': f'No incidents found for {date}'
-        })
-
-    # Return only the columns the agent needs
-    cols = ['case_number', 'date', 'time', 'block',
-            'latitude', 'longitude', 'ward', 'fatal']
-    cols = [c for c in cols if c in matches.columns]
-
+@app.route('/')
+def index():
     return jsonify({
-        'date': date,
-        'count': len(matches),
-        'incidents': matches[cols].to_dict(orient='records')
+        'name':      'Chicago Gun Violence API',
+        'endpoints': {
+            '/incidents': 'GET ?date=YYYY-MM-DD&year=YYYY',
+            '/health':    'GET — check loaded data',
+        }
     })
+
 
 @app.route('/health')
 def health():
     return jsonify({
-        'status': 'ok',
-        'years_loaded': list(DATA.keys()),
-        'row_counts': {y: len(df) for y, df in DATA.items()}
+        'status':      'ok',
+        'years':       list(DATA.keys()),
+        'row_counts':  {y: len(df) for y, df in DATA.items()},
+        'date_ranges': {
+            y: {
+                'newest': df['date_only'].max(),
+                'oldest': df['date_only'].min(),
+            }
+            for y, df in DATA.items()
+        }
     })
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5001)
+
+@app.route('/incidents')
+def incidents():
+    date = request.args.get('date', '').strip()   # YYYY-MM-DD
+    year = request.args.get('year', '').strip()   # 2024 / 2025 / 2026
+
+    # Validate inputs
+    if not date:
+        return jsonify({'error': 'date parameter required (YYYY-MM-DD)'}), 400
+    if not year:
+        return jsonify({'error': 'year parameter required (2024/2025/2026)'}), 400
+    if year not in DATA:
+        return jsonify({'error': f'No data loaded for year {year}'}), 404
+
+    df      = DATA[year]
+    matches = df[df['date_only'] == date].copy()
+
+    if matches.empty:
+        return jsonify({
+            'date':      date,
+            'year':      year,
+            'count':     0,
+            'incidents': [],
+            'message':   f'No incidents found for {date} in {year}',
+        })
+
+    # Return only the columns the agent uses
+    want = ['case_number', 'date', 'time', 'block',
+            'latitude', 'longitude', 'ward', 'fatal']
+    cols = [c for c in want if c in matches.columns]
+
+    records = (
+        matches[cols]
+        .fillna('')
+        .to_dict(orient='records')
+    )
+
+    return jsonify({
+        'date':      date,
+        'year':      year,
+        'count':     len(records),
+        'incidents': records,
+    })
