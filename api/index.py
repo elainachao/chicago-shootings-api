@@ -1,8 +1,11 @@
 from flask import Flask, jsonify, request
+from flask_cors import CORS
 import pandas as pd
+import json
 import os
 
 app = Flask(__name__)
+CORS(app)  # required so map artifact can fetch from this domain
 
 BASE     = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE, 'data')
@@ -49,8 +52,9 @@ def index():
     return jsonify({
         'name':      'Chicago Gun Violence API',
         'endpoints': {
-            '/incidents': 'GET ?date=YYYY-MM-DD&year=YYYY',
-            '/health':    'GET — check loaded data',
+            '/incidents':  'GET ?date=YYYY-MM-DD&year=YYYY',
+            '/boundaries': 'GET — ward and district GeoJSON',
+            '/health':     'GET — check loaded data',
         }
     })
 
@@ -113,3 +117,20 @@ def incidents():
         'count':     len(records),
         'incidents': records,
     })
+
+
+@app.route('/boundaries')
+def boundaries():
+    """Serves ward and district GeoJSON from local files."""
+    result = {}
+    ward_path     = os.path.join(DATA_DIR, 'ward_boundaries.json')
+    district_path = os.path.join(DATA_DIR, 'police_districts.json')
+    if os.path.exists(ward_path):
+        with open(ward_path) as f:
+            result['wards'] = json.load(f)
+    if os.path.exists(district_path):
+        with open(district_path) as f:
+            result['districts'] = json.load(f)
+    if not result:
+        return jsonify({'error': 'Boundary files not found'}), 404
+    return jsonify(result)
